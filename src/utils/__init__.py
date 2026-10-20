@@ -1,0 +1,1 @@
+"""Utilitários: logger e exceções."""
