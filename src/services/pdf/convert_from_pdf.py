@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import re
+import sys
 from pathlib import Path
 from typing import List, Sequence
 
@@ -102,12 +103,26 @@ def to_html(job: JobContext, files: Sequence[Path], layout: str = "flow") -> Too
     return ToolResult(outputs)
 
 
+def _enable_layout() -> None:
+    """Ativa a análise de layout (modelos ONNX) bloqueada em src/__init__.py, só quando a ferramenta a usa."""
+    if sys.modules.get("pymupdf.layout", False) is not None:
+        return
+    del sys.modules["pymupdf.layout"]
+    try:
+        import pymupdf.layout  # noqa: F401  (registra o analisador no pymupdf)
+    except ImportError:
+        return
+    if "pymupdf4llm" in sys.modules:
+        sys.modules["pymupdf4llm"].use_layout(True)  # importado pelo pymupdf quando o layout ainda estava bloqueado
+
+
 def to_markdown(job: JobContext, files: Sequence[Path]) -> ToolResult:
     """Markdown com títulos, listas e tabelas detectados (pymupdf4llm)."""
     try:
         import pymupdf4llm
     except ImportError as error:
         raise DependencyError("Pacote 'pymupdf4llm' não instalado. Execute: pip install pymupdf4llm", dependency="pymupdf4llm") from error
+    _enable_layout()
     outputs = []
     for index, path in enumerate(files):
         job.progress(index, len(files), f"Convertendo {path.name}")
@@ -148,6 +163,8 @@ def to_excel(job: JobContext, files: Sequence[Path], mode: str = "tables") -> To
     from openpyxl.utils import get_column_letter
 
     outputs, lines = [], []
+    if mode == "tables":
+        _enable_layout()  # find_tables usa o analisador de layout quando ele está ativo
     for index, path in enumerate(files):
         job.progress(index, len(files), f"Convertendo {path.name}")
         workbook = Workbook()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import tkinter as tk
 from typing import Dict, List, Sequence, Tuple
 
 import customtkinter as ctk
@@ -10,50 +11,86 @@ from ...config.catalog import all_tools, tools_by_id
 from ...domain.tool import CATEGORIES, CATEGORY_BY_ID, ToolSpec
 from .. import icons, theme
 
-_CARD_GAP = 12
+_CARD_GAP = 18  # horizontal; na vertical os cartões ficam mais próximos (_CARD_GAP_Y)
+_CARD_GAP_Y = 12
 _TEXT_WIDTH = theme.CARD_WIDTH - 100  # ícone (64) + estrela (36): todos os cartões pedem a mesma largura
 
 
-class ToolCard(ctk.CTkFrame):
-    """Cartão clicável de uma ferramenta, com estrela de favorito."""
+class ToolCard(tk.Canvas):
+    """
+    Cartão clicável de uma ferramenta, com estrela de favorito.
+
+    Desenhado num único Canvas: com dezenas de cartões, montar cada um com moldura, rótulos
+    e botão do CustomTkinter deixava a abertura da tela inicial vários segundos mais lenta.
+    """
+
+    _STAR_BOX = 24
+    _STAR_MARGIN = 6
 
     def __init__(self, master, tool: ToolSpec, on_open, on_favorite, favorite: bool):
-        super().__init__(master, width=theme.CARD_WIDTH, height=theme.CARD_HEIGHT, fg_color=theme.SURFACE, corner_radius=12, border_width=1, border_color=theme.BORDER)
+        super().__init__(master, highlightthickness=0, bd=0, cursor="hand2")
         self.tool = tool
-        self.grid_propagate(False)
-        self.grid_columnconfigure(1, weight=1)
-        self.grid_rowconfigure((0, 1), weight=1)
         self._on_open, self._on_favorite = on_open, on_favorite
-        ctk.CTkLabel(self, text="", image=icons.tool_icon(tool.icon, tool.color, 42)).grid(row=0, column=0, rowspan=2, padx=(12, 10))
-        ctk.CTkLabel(self, text=tool.name, width=_TEXT_WIDTH, font=theme.font(13, "bold"), text_color=theme.TEXT, anchor="w").grid(row=0, column=1, sticky="sw", pady=(10, 0))
-        ctk.CTkLabel(self, text=tool.description, width=_TEXT_WIDTH, font=theme.font(11), text_color=theme.TEXT_MUTED, anchor="nw", justify="left", wraplength=_TEXT_WIDTH).grid(
-            row=1, column=1, sticky="nw", pady=(0, 8)
-        )
-        self._star = ctk.CTkButton(self, text="", width=24, height=24, fg_color="transparent", hover_color=theme.NEUTRAL_BUTTON_HOVER, command=self._toggle_favorite)
-        self._star.grid(row=0, column=2, sticky="ne", padx=6, pady=6)
-        self.set_favorite(favorite)
-        for widget in [self] + [child for child in self.winfo_children() if child is not self._star]:
-            widget.bind("<Button-1>", lambda _event: self._on_open(self.tool), add="+")
-            widget.bind("<Enter>", lambda _event: self._hover(True), add="+")
-            widget.bind("<Leave>", self._leave, add="+")
-            widget.configure(cursor="hand2")
+        self._favorite = favorite
+        self._hover = self._star_hover = False
+        self._scaling = ctk.ScalingTracker.get_widget_scaling(master)
+        self.bind("<Button-1>", self._click)
+        self.bind("<Motion>", lambda event: self._set_hover(True, self._in_star(event.x, event.y)))
+        self.bind("<Leave>", lambda _event: self._set_hover(False, False))
+        ctk.AppearanceModeTracker.add(self._on_appearance, self)
+        ctk.ScalingTracker.add_widget(self._on_scaling, self)
+        self._draw()
 
     def set_favorite(self, favorite: bool) -> None:
-        image = icons.icon("star", 16, ("#F59E0B", "#FBBF24")) if favorite else icons.icon("star_outline", 16, theme.BORDER)
-        self._star.configure(image=image)
+        self._favorite = favorite
+        self._draw()
 
-    def _toggle_favorite(self) -> None:
-        self.set_favorite(self._on_favorite(self.tool))
+    def destroy(self) -> None:
+        ctk.AppearanceModeTracker.remove(self._on_appearance)
+        ctk.ScalingTracker.remove_widget(self._on_scaling, self)
+        super().destroy()
 
-    def _hover(self, active: bool) -> None:
-        self.configure(fg_color=theme.HOVER if active else theme.SURFACE, border_color=theme.ACCENT if active else theme.BORDER)
+    def _on_appearance(self, _mode: str) -> None:
+        self._draw()
 
-    def _leave(self, event) -> None:
-        widget = self.winfo_containing(event.x_root, event.y_root)
-        while widget is not None and widget is not self:
-            widget = widget.master
-        if widget is None:
-            self._hover(False)
+    def _on_scaling(self, widget_scaling: float, _window_scaling: float) -> None:
+        self._scaling = widget_scaling
+        self._draw()
+
+    def _px(self, value: float) -> int:
+        return round(value * self._scaling)
+
+    def _draw(self) -> None:
+        color = theme.color
+        width, height = self._px(theme.CARD_WIDTH), self._px(theme.CARD_HEIGHT)
+        self.configure(width=width, height=height, bg=color(theme.BACKGROUND))
+        self.delete("all")
+        fill, border = (theme.HOVER, theme.ACCENT) if self._hover else (theme.SURFACE, theme.BORDER)
+        self.create_image(0, 0, anchor="nw", image=icons.rounded_photo(width, height, self._px(12), color(fill), color(border), max(1, self._px(1))))
+        self.create_image(self._px(12), height // 2, anchor="w", image=icons.tile_photo(self.tool.icon, self.tool.color, self._px(42)))
+        text_x, text_width = self._px(64), self._px(_TEXT_WIDTH)
+        self.create_text(text_x, self._px(24), anchor="w", text=self.tool.name, width=text_width, fill=color(theme.TEXT), font=theme.font(13, "bold").create_scaled_tuple(self._scaling))
+        self.create_text(text_x, self._px(37), anchor="nw", text=self.tool.description, width=text_width, fill=color(theme.TEXT_MUTED), font=theme.font(11).create_scaled_tuple(self._scaling))
+        box, x0, y0 = self._px(self._STAR_BOX), width - self._px(self._STAR_MARGIN + self._STAR_BOX), self._px(self._STAR_MARGIN)
+        if self._star_hover:
+            self.create_image(x0, y0, anchor="nw", image=icons.rounded_photo(box, box, self._px(6), color(theme.NEUTRAL_BUTTON_HOVER)))
+        star = icons.icon_photo("star", color(("#F59E0B", "#FBBF24")), self._px(16)) if self._favorite else icons.icon_photo("star_outline", color(theme.BORDER), self._px(16))
+        self.create_image(x0 + box // 2, y0 + box // 2, image=star)
+
+    def _in_star(self, x: int, y: int) -> bool:
+        x0, y0 = int(self.cget("width")) - self._px(self._STAR_MARGIN + self._STAR_BOX), self._px(self._STAR_MARGIN)
+        return x0 <= x <= x0 + self._px(self._STAR_BOX) and y0 <= y <= y0 + self._px(self._STAR_BOX)
+
+    def _set_hover(self, hover: bool, star_hover: bool) -> None:
+        if (hover, star_hover) != (self._hover, self._star_hover):
+            self._hover, self._star_hover = hover, star_hover
+            self._draw()
+
+    def _click(self, event) -> None:
+        if self._in_star(event.x, event.y):
+            self.set_favorite(self._on_favorite(self.tool))
+        else:
+            self._on_open(self.tool)
 
 
 class HomePage(ctk.CTkFrame):
@@ -142,6 +179,8 @@ class HomePage(ctk.CTkFrame):
         for widget in self._extras:
             widget.destroy()
         self._extras.clear()
+        # o Canvas do Tk, ao contrário dos widgets CTk, não escala o espaçamento sozinho
+        padx, pady = round(_CARD_GAP / 2 * scaling), round(_CARD_GAP_Y / 2 * scaling)
         row = 0
         for title, tools in self._groups:
             if title:
@@ -150,7 +189,7 @@ class HomePage(ctk.CTkFrame):
                 self._extras.append(header)
                 row += 1
             for index, tool in enumerate(tools):
-                self._cards[tool.id].grid(row=row + index // columns, column=index % columns, padx=_CARD_GAP // 2, pady=_CARD_GAP // 2, sticky="nw")
+                self._cards[tool.id].grid(row=row + index // columns, column=index % columns, padx=padx, pady=pady, sticky="nw")
             row += -(-len(tools) // columns)
         if not any(tools for _, tools in self._groups):
             empty = ctk.CTkLabel(self._scroll, text="Nada por aqui ainda.", font=theme.font(14), text_color=theme.TEXT_MUTED)

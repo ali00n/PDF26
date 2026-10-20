@@ -10,7 +10,7 @@ from functools import lru_cache
 from typing import Callable, Dict, Tuple
 
 import customtkinter as ctk
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageTk
 
 from . import theme
 
@@ -279,3 +279,30 @@ def icon(name: str, size: int = 18, colors: Tuple[str, str] = theme.TEXT) -> ctk
     """Pictograma com cor para tema claro e escuro (padrão: cor do texto)."""
     light, dark = (colors, colors) if isinstance(colors, str) else colors
     return ctk.CTkImage(light_image=_render(name, light, size), dark_image=_render(name, dark, size), size=(size, size))
+
+
+# ---------------------------------------------------------------- imagens Tk para Canvas
+# Em pixels reais (já com a escala da tela aplicada) e cor única: quem desenha num Canvas
+# resolve o tema com theme.color e redesenha quando ele muda.
+
+
+@lru_cache(maxsize=None)
+def tile_photo(label: str, color: str, px: int) -> ImageTk.PhotoImage:
+    return ImageTk.PhotoImage(tile_image(label, color, px * SCALE).resize((px, px), Image.LANCZOS))
+
+
+@lru_cache(maxsize=None)
+def icon_photo(name: str, color: str, px: int) -> ImageTk.PhotoImage:
+    image = Image.new("RGBA", (px * SCALE, px * SCALE), (0, 0, 0, 0))
+    PAINTERS[name](ImageDraw.Draw(image), px * SCALE, color)
+    return ImageTk.PhotoImage(image.resize((px, px), Image.LANCZOS))
+
+
+@lru_cache(maxsize=None)
+def rounded_photo(width: int, height: int, radius: int, fill: str, outline: str = "", line: int = 0) -> ImageTk.PhotoImage:
+    """Retângulo arredondado antisserrilhado (o Canvas do Tk não suaviza bordas)."""
+    image = Image.new("RGBA", (width * SCALE, height * SCALE), (0, 0, 0, 0))
+    ImageDraw.Draw(image).rounded_rectangle(
+        (0, 0, width * SCALE - 1, height * SCALE - 1), radius=radius * SCALE, fill=fill, outline=outline or None, width=line * SCALE
+    )
+    return ImageTk.PhotoImage(image.resize((width, height), Image.LANCZOS))
